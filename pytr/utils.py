@@ -214,11 +214,21 @@ class Timeline:
     def __init__(self, tr):
         self.tr = tr
         self.log = get_logger(__name__)
+
         self.received_detail = 0
         self.requested_detail = 0
         self.num_timeline_details = 0
+
+        self.timeline_transactions = []
+        self.num_timeline_transactions = 0
+        self.timeline_events_v2 = []
+        self.received_detail_v2 = 0
+        self.requested_detail_v2 = 0
+        self.num_timeline_details_v2 = 0
+
         self.events_without_docs = []
         self.events_with_docs = []
+        self.events = {}
 
     async def get_next_timeline(self, response=None, max_age_timestamp=0):
         '''
@@ -303,12 +313,60 @@ class Timeline:
             self.requested_detail += 1
             await self.tr.timeline_detail(event['data']['id'])
 
+    async def _get_timeline_details_v2(self, num_torequest, max_age_timestamp=0):
+        '''
+        request timeline details V2
+        '''
+        while num_torequest > 0:
+            if len(self.timeline_events_v2) == 0:
+                self.log.info('All timeline details V2 requested')
+                return False
+
+            else:
+                event = self.timeline_events_v2.pop()
+
+            action = event.get('action')
+            # icon = event['data'].get('icon')
+            msg = ''
+            if max_age_timestamp != 0 and event['timestamp'] > max_age_timestamp:
+                msg += 'Skip: too old'
+            # elif icon is None:
+            #     pass
+            # elif icon.endswith('/human.png'):
+            #     msg += 'Skip: human'
+            # elif icon.endswith('/CashIn.png'):
+            #     msg += 'Skip: CashIn'
+            # elif icon.endswith('/ExemptionOrderChanged.png'):
+            #     msg += 'Skip: ExemptionOrderChanged'
+
+            elif action is None:
+                if event.get('actionLabel') is None:
+                    msg += 'Skip: no action'
+            elif action.get('type') != 'timelineDetail':
+                msg += f"Skip: action type unmatched ({action['type']})"
+            elif action.get('payload') != event['id']:
+                msg += f"Skip: payload unmatched ({action['payload']})"
+
+            self.events[event['id']] = event
+            if msg == '':
+                self.events_with_docs.append(event)
+            else:
+                self.events_without_docs.append(event)
+                self.log.debug(f"{msg} {event['title']}: {event.get('body')} {json.dumps(event)}")
+                self.num_timeline_details -= 1
+                continue
+
+            num_torequest -= 1
+            self.requested_detail_v2 += 1
+            await self.tr.timeline_detail_v2(event['id'])
+
     async def timelineDetail(self, response, dl, max_age_timestamp=0):
         '''
         process timeline response and request timelines
         '''
 
         self.received_detail += 1
+        # print(json.dumps(response))
 
         # when all requested timeline events are received request 5 new
         if self.received_detail == self.requested_detail:
@@ -320,7 +378,7 @@ class Timeline:
 
         # print(f'len timeline_events: {len(self.timeline_events)}')
         isSavingsPlan = False
-        if response['subtitleText'] == 'Sparplan':
+        if response.get('subtitleText') == 'Sparplan':
             isSavingsPlan = True
         else:
             # some savingsPlan don't have the subtitleText == 'Sparplan' but there are actions just for savingsPans
@@ -332,7 +390,7 @@ class Timeline:
                             isSavingsPlan = True
                             break
 
-        if response['subtitleText'] != 'Sparplan' and isSavingsPlan is True:
+        if response.get('subtitleText') != 'Sparplan' and isSavingsPlan is True:
             isSavingsPlan_fmt = ' -- SPARPLAN'
         else:
             isSavingsPlan_fmt = ''
@@ -374,3 +432,96 @@ class Timeline:
             export_transactions(dl.output_path / 'other_events.json', dl.output_path / 'account_transactions.csv')
 
             dl.work_responses()
+
+
+    async def timelineDetailV2(self, response, dl, max_age_timestamp=0):
+        '''
+        process timeline response and request timelines
+        '''
+
+        self.received_detail_v2 += 1
+        # print(json.dumps(response))
+
+        # when all requested timeline events are received request 5 new
+        if self.received_detail_v2 == self.requested_detail_v2:
+            remaining = len(self.timeline_events_v2)
+            if remaining < 5:
+                await self._get_timeline_details_v2(remaining)
+            else:
+                await self._get_timeline_details_v2(5)
+
+        event = self.events[response["id"]]
+        # print(f'len timeline_events: {len(self.timeline_events)}')
+        isSavingsPlan = (event["eventType"] == "SAVINGS_PLAN_EXECUTED")
+
+        max_details_digits = len(str(self.num_timeline_details_v2))
+        self.log.info(
+            f"{self.received_detail_v2:>{max_details_digits}}/{self.num_timeline_details_v2}: "
+            + f"{event['title']} -- {event['subtitle']}"
+        )
+
+        for section in response['sections']:
+            if section['type'] == 'documents':
+                for doc in section['data']:
+                    try:
+                        timestamp = datetime.strptime(doc['detail'], '%d.%m.%Y').timestamp() * 1000
+                    except ValueError:
+                        timestamp = datetime.now().timestamp() * 1000
+                    if max_age_timestamp == 0 or max_age_timestamp < timestamp:
+                        # save all savingsplan documents in a subdirectory
+                        if isSavingsPlan:
+                            dl.dl_doc(doc, event['title'], event['subtitle'], subfolder='Sparplan')
+                        else:
+                            dl.dl_doc(doc, event['title'], event['subtitle'])
+
+        if self.received_detail_v2 == self.num_timeline_details_v2:
+            self.log.info('Received all details V2')
+            dl.output_path.mkdir(parents=True, exist_ok=True)
+            with open(dl.output_path / 'other_events.json', 'w', encoding='utf-8') as f:
+                json.dump(self.events_without_docs, f, ensure_ascii=False, indent=2)
+
+            with open(dl.output_path / 'events_with_documents.json', 'w', encoding='utf-8') as f:
+                json.dump(self.events_with_docs, f, ensure_ascii=False, indent=2)
+
+            export_transactions(dl.output_path / 'other_events.json', dl.output_path / 'account_transactions.csv')
+
+            dl.work_responses()
+
+
+    async def get_next_timeline_transactions(self, response=None, max_age_timestamp=0):
+        '''
+        Get timelineTransactions and save time in list timelineTransactions.
+        Extract timeline events V2 and save them in list timeline_events_v2
+
+        '''
+
+        if response is None:
+            # empty response / first timelineTransactions
+            self.log.info('Awaiting #1  timelineTransactions')
+            self.timeline_transactions = []
+            self.num_timeline_transactions = 0
+            self.timeline_events_v2 = []
+            await self.tr.timeline_transactions()
+        else:
+            # print(json.dumps(response))
+            timestamp = response['items'][-1]['timestamp']
+            self.num_timeline_transactions += 1
+            self.num_timeline_details_v2 += len(response['items'])
+            for event in response['items']:
+                self.timeline_events_v2.append(event)
+
+            after = response['cursors'].get('after')
+            if after is None:
+                # last timelineTransactions is reached
+                self.log.info(f'Received #{self.num_timeline_transactions:<2} (last) timelineTransactions')
+                await self._get_timeline_details_v2(5)
+            elif max_age_timestamp != 0 and timestamp < max_age_timestamp:
+                self.log.info(f'Received #{self.num_timeline_transactions + 1:<2} timelineTransactions')
+                self.log.info('Reached last relevant timelineTransactions')
+                await self._get_timeline_details_v2(5, max_age_timestamp=max_age_timestamp)
+            else:
+                self.log.info(
+                    f'Received #{self.num_timeline_transactions:<2} timelineTransactions, '
+                    f'awaiting #{self.num_timeline_transactions + 1:<2} timelineTransactions'
+                )
+                await self.tr.timeline_transactions(after)

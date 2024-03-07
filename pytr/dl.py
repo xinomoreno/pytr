@@ -66,20 +66,25 @@ class DL:
             self.log.info('Created history file')
 
     async def dl_loop(self):
-        await self.tl.get_next_timeline(max_age_timestamp=self.since_timestamp)
+        # await self.tl.get_next_timeline(max_age_timestamp=self.since_timestamp)
+        await self.tl.get_next_timeline_transactions(max_age_timestamp=self.since_timestamp)
 
         while True:
             try:
                 _subscription_id, subscription, response = await self.tr.recv()
             except TradeRepublicError as e:
-                self.log.fatal(str(e))
-
-            if subscription['type'] == 'timeline':
-                await self.tl.get_next_timeline(response, max_age_timestamp=self.since_timestamp)
-            elif subscription['type'] == 'timelineDetail':
-                await self.tl.timelineDetail(response, self, max_age_timestamp=self.since_timestamp)
+                self.log.error(str(e))
             else:
-                self.log.warning(f"unmatched subscription of type '{subscription['type']}':\n{preview(response)}")
+                #if subscription['type'] == 'timeline':
+                #    await self.tl.get_next_timeline(response, max_age_timestamp=self.since_timestamp)
+                #elif subscription['type'] == 'timelineDetail':
+                #    await self.tl.timelineDetail(response, self, max_age_timestamp=self.since_timestamp)
+                if subscription['type'] == 'timelineTransactions':
+                    await self.tl.get_next_timeline_transactions(response, max_age_timestamp=self.since_timestamp)
+                elif subscription['type'] == 'timelineDetailV2':
+                    await self.tl.timelineDetailV2(response, self, max_age_timestamp=self.since_timestamp)
+                else:
+                    self.log.warning(f"unmatched subscription of type '{subscription['type']}':\n{preview(response)}")
 
     def dl_doc(self, doc, titleText, subtitleText, subfolder=None):
         '''

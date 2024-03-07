@@ -445,11 +445,17 @@ class TradeRepublicApi:
     async def neon_cards(self):
         return await self.subscribe({'type': 'neonCards'})
 
+    async def timeline_transactions(self, after=None):
+        return await self.subscribe({'type': 'timelineTransactions', 'after': after})
+
     async def timeline(self, after=None):
         return await self.subscribe({'type': 'timeline', 'after': after})
 
     async def timeline_detail(self, timeline_id):
         return await self.subscribe({'type': 'timelineDetail', 'id': timeline_id})
+
+    async def timeline_detail_v2(self, timeline_id):
+        return await self.subscribe({'type': 'timelineDetailV2', 'id': timeline_id})
 
     async def timeline_detail_order(self, order_id):
         return await self.subscribe({'type': 'timelineDetail', 'orderId': order_id})
