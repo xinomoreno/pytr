@@ -167,6 +167,94 @@ class DL:
         else:
             self.log.debug(f'file {filepath} already exists. Skipping...')
 
+    def dl_doc_v2_(self, doc, titleText, subtitleText, subfolder=None):
+        '''
+        send asynchronous request, append future with filepath to self.futures
+        '''
+        doc_url = doc['action']['payload']
+
+        date = doc['detail']
+        iso_date = '-'.join(date.split('.')[::-1])
+        doc_id = doc['id']
+
+        # extract time from subtitleText
+        # time = re.findall('um (\\d+:\\d+) Uhr', subtitleText)
+        time = []
+        if time == []:
+            time = ''
+        else:
+            time = f' {time[0]}'
+
+        if subfolder is not None:
+            directory = self.output_path / subfolder
+        else:
+            directory = self.output_path
+
+        # If doc_type is something like 'Kosteninformation 2', then strip the 2 and save it in doc_type_num
+        doc_type = doc['title'].rsplit(' ')
+        if doc_type[-1].isnumeric() is True:
+            doc_type_num = f' {doc_type.pop()}'
+        else:
+            doc_type_num = ''
+
+        doc_type = ' '.join(doc_type)
+        titleText = titleText.replace('\n', '').replace('/', '-') if titleText is not None else ''
+        subtitleText = subtitleText.replace('\n', '').replace('/', '-') if subtitleText is not None else ''
+
+        filename = self.filename_fmt.format(
+            iso_date=iso_date, time=time, title=titleText, subtitle=subtitleText, doc_num=doc_type_num, id=doc_id
+        )
+
+        filename_with_doc_id = filename + f' ({doc_id})'
+
+        if doc_type in ['Kontoauszug', 'Depotauszug']:
+            filepath = directory / 'Abschlüsse' / f'{filename}' / f'{doc_type}.pdf'
+            filepath_with_doc_id = directory / 'Abschlüsse' / f'{filename_with_doc_id}' / f'{doc_type}.pdf'
+        else:
+            filepath = directory / doc_type / f'{filename}.pdf'
+            filepath_with_doc_id = directory / doc_type / f'{filename_with_doc_id}.pdf'
+
+        self.dl_doc_v2(doc_url, filepath, filepath_with_doc_id)
+
+    def dl_doc_v2(self, doc_url, filepath, filepath_with_doc_id):
+        '''
+        send asynchronous request, append future with filepath to self.futures
+        '''
+        if self.universal_filepath:
+            filepath = sanitize_filepath(filepath, '_', 'universal')
+            filepath_with_doc_id = sanitize_filepath(filepath_with_doc_id, '_', 'universal')
+        else:
+            filepath = sanitize_filepath(filepath, '_', 'auto')
+            filepath_with_doc_id = sanitize_filepath(filepath_with_doc_id, '_', 'auto')
+
+        if filepath in self.filepaths:
+            self.log.debug(f'File {filepath} already in queue. Append document id ...')
+            if filepath_with_doc_id in self.filepaths:
+                self.log.debug(f'File {filepath_with_doc_id} already in queue. Skipping...')
+                return
+            else:
+                filepath = filepath_with_doc_id
+        self.filepaths.append(filepath)
+
+        if filepath.is_file() is False:
+            doc_url_base = doc_url.split('?')[0]
+            if doc_url_base in self.doc_urls:
+                self.log.debug(f'URL {doc_url_base} already in queue. Skipping...')
+                return
+            elif doc_url_base in self.doc_urls_history:
+                self.log.debug(f'URL {doc_url_base} already in history. Skipping...')
+                return
+            else:
+                self.doc_urls.append(doc_url_base)
+
+            future = self.session.get(doc_url)
+            future.filepath = filepath
+            future.doc_url_base = doc_url_base
+            self.futures.append(future)
+            self.log.debug(f'Added {filepath} to queue')
+        else:
+            self.log.debug(f'file {filepath} already exists. Skipping...')
+
     def work_responses(self):
         '''
         process responses of async requests

@@ -230,6 +230,8 @@ class Timeline:
         self.events_with_docs = []
         self.events = {}
 
+        self.card_transactions = []
+
     async def get_next_timeline(self, response=None, max_age_timestamp=0):
         '''
         Get timelines and save time in list timelines.
@@ -433,6 +435,36 @@ class Timeline:
 
             dl.work_responses()
 
+    def card_transaction(self, event):
+        digits = event["amount"]["fractionDigits"]
+        currency = event["amount"]["currency"]
+        amount = f'{event["amount"]["value"]:.{digits}f}'.replace('.', ',')
+        timestamp = datetime.fromisoformat(event["timestamp"])
+        datestr = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        merchant = event["title"]
+        saveback_amount = ""
+        saveback_instrument = ""
+        roundup_amount = ""
+        roundup_instrument = ""
+        for section in event["details"]["sections"]:
+            data = section["data"]
+            if isinstance(data, list):
+                for entry in data:
+                    detail = entry.get("detail", {})
+                    if detail:
+                        action = detail.get("action")
+                        if action:
+                            action_type = action.get("type", "")
+                            if action_type == "benefitsSavebackOverview":
+                                saveback_amount = detail["amount"].rstrip("  €")
+                                saveback_instrument = detail["title"]
+                            elif action_type == "benefitsRoundupOverview":
+                                roundup_amount = detail["amount"].rstrip("  €")
+                                roundup_instrument = detail["title"]
+
+        if not self.card_transactions:
+            self.card_transactions.append(["Datum", "Haendler", "Betrag", "Waehrung", "Saveback Betrag", "Saveback Sparplan", "Round-Up Betrag", "Round-Up Sparplan"])
+        self.card_transactions.append([datestr, merchant, amount, currency, saveback_amount, saveback_instrument, roundup_amount, roundup_instrument])
 
     async def timelineDetailV2(self, response, dl, max_age_timestamp=0):
         '''
@@ -451,8 +483,12 @@ class Timeline:
                 await self._get_timeline_details_v2(5)
 
         event = self.events[response["id"]]
+        event["details"] = response
         # print(f'len timeline_events: {len(self.timeline_events)}')
-        isSavingsPlan = (event["eventType"] == "SAVINGS_PLAN_EXECUTED")
+        isSavingsPlan = (event["eventType"] in {"SAVINGS_PLAN_EXECUTED", "benefits_spare_change_execution", "benefits_saveback_execution"})
+
+        if event["eventType"] == "card_successful_transaction":
+            self.card_transaction(event)
 
         max_details_digits = len(str(self.num_timeline_details_v2))
         self.log.info(
@@ -470,9 +506,9 @@ class Timeline:
                     if max_age_timestamp == 0 or max_age_timestamp < timestamp:
                         # save all savingsplan documents in a subdirectory
                         if isSavingsPlan:
-                            dl.dl_doc(doc, event['title'], event['subtitle'], subfolder='Sparplan')
+                            dl.dl_doc_v2_(doc, event['title'], event['subtitle'], subfolder='Sparplan')
                         else:
-                            dl.dl_doc(doc, event['title'], event['subtitle'])
+                            dl.dl_doc_v2_(doc, event['title'], event['subtitle'])
 
         if self.received_detail_v2 == self.num_timeline_details_v2:
             self.log.info('Received all details V2')
@@ -480,10 +516,18 @@ class Timeline:
             with open(dl.output_path / 'other_events.json', 'w', encoding='utf-8') as f:
                 json.dump(self.events_without_docs, f, ensure_ascii=False, indent=2)
 
+            with open(dl.output_path / 'all_events.json', 'w', encoding='utf-8') as f:
+                json.dump(list(self.events.values()), f, ensure_ascii=False, indent=2)
+
             with open(dl.output_path / 'events_with_documents.json', 'w', encoding='utf-8') as f:
                 json.dump(self.events_with_docs, f, ensure_ascii=False, indent=2)
 
             export_transactions(dl.output_path / 'other_events.json', dl.output_path / 'account_transactions.csv')
+
+            with open(dl.output_path / 'card_transactions.csv', 'w', encoding='utf-8') as f:
+                for transaction in self.card_transactions:
+                    f.write(";".join(transaction))
+                    f.write("\n")
 
             dl.work_responses()
 
