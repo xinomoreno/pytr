@@ -508,13 +508,17 @@ class TimelineTransaction:
         s = self.payment(event, 'Von')
         return f'Payment inbound: {s}'
 
+    def event_payment_outbound(self, event, dl, max_age_timestamp=0):
+        s = self.payment(event, 'An')
+        return f'Payment outbound: {s}'
+
     def event_payment_inbound_sepa_direct_debit(self, event, dl, max_age_timestamp=0):
         amount, currency = self.get_amount(event["amount"])
         timestamp, date, time = self.get_datetime(event["timestamp"])
         filedate = timestamp.strftime("%Y-%m-%d %H-%M")
 
         if not self.direct_debit:
-            self.direct_debit.append(["Datum", "Zeit", "Wert", "Währung", "Notiz"])
+            self.direct_debit.append(["Datum", "Uhrzeit", "Wert", "Währung", "Notiz"])
         self.direct_debit.append([date, time, amount, currency, "Lastschrifteinzug"])
         # Download invoice
         documents = self.get_key(event["details"]["sections"], "title", "Dokumente")
@@ -528,11 +532,27 @@ class TimelineTransaction:
         dl.dl_doc_v2(url, filepath)
         return f'Payment inbound: direct debit: {amount} {currency}'
 
-    def event_payment_outbound(self, event, dl, max_age_timestamp=0):
-        s = self.payment(event, 'An')
-        return f'Payment outbound: {s}'
-
     def event_repayment(self, event, dl, max_age_timestamp=0):
+        amount, currency = self.get_amount(event["amount"])
+        timestamp, *_ = self.get_datetime(event["timestamp"])
+
+        sections = event["details"]["sections"]
+        overview_data = self.get_key(sections, "title", "Übersicht")["data"]
+        description = self.get_key(overview_data, "title", "Ereignis")["detail"]["text"]
+        asset = self.get_key(overview_data, "title", "Asset")["detail"]["text"]
+        isin = self.get_key(sections, ["action", "type"], "instrumentDetail")["action"]["payload"]
+
+        # Download invoice
+        documents = self.get_key(event["details"]["sections"], "title", "Dokumente")
+        data = self.get_key(documents["data"], "title", "Abrechnung")
+        type_ = data["title"]
+        date = data["detail"]
+        filedate = datetime.strptime(date, "%d.%m.%Y").strftime("%Y-%m-%d")
+        url = data["action"]["payload"]
+        id_ = data["id"]
+
+        filepath = Path(f'{type_} {description}') / f'{filedate} - {type_} {description} {asset} {isin} - {id_}.pdf'
+        dl.dl_doc_v2(url, filepath)
         return f'{event["subtitle"]}: {event["title"]}'
 
     def event_savings_plan_executed(self, event, dl, max_age_timestamp=0):
@@ -580,7 +600,7 @@ class TimelineTransaction:
 
         if not self.card_transactions:
             self.card_transactions.append(
-                ["Datum", "Urzeit", "Haendler", "Wert", "Waehrung", "Saveback Betrag", "Saveback Sparplan",
+                ["Datum", "Uhrzeit", "Händler", "Wert", "Währung", "Saveback Betrag", "Saveback Sparplan",
                  "Round-Up Betrag", "Round-Up Sparplan"])
         self.card_transactions.append(
             [date, time, merchant, amount, currency, saveback_amount, saveback_instrument, roundup_amount,
