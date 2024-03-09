@@ -227,9 +227,9 @@ class DL:
             filepath = directory / doc_type / f'{filename}.pdf'
             filepath_with_doc_id = directory / doc_type / f'{filename_with_doc_id}.pdf'
 
-        self.dl_doc_v2(doc_url, filepath)
+        self.dl_doc_v2(doc_url, filepath, doc_id)
 
-    def dl_doc_v2(self, doc_url, filepath):
+    def dl_doc_v2(self, doc_url, filepath, doc_id):
         '''
         send asynchronous request, append future with filepath to self.futures
         '''
@@ -241,9 +241,11 @@ class DL:
             filepath = sanitize_filepath(filepath, '_', 'auto')
 
         if filepath in self.filepaths:
-            self.log.debug(f'File {filepath} already in queue. Append document id ...')
-            return
-
+            self.log.debug(f'File {filepath} already in queue. Append document id {doc_id}...')
+            filepath = filepath.with_stem(filepath.stem + f' ({doc_id})')
+            if filepath in self.filepaths:
+                self.log.debug(f'File {filepath} already in queue. Skipping...')
+                return
         self.filepaths.append(filepath)
 
         if filepath.is_file() is False:
