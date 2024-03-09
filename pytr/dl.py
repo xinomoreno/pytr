@@ -7,7 +7,7 @@ from requests import session
 
 from pathvalidate import sanitize_filepath
 
-from pytr.utils import preview, Timeline, get_logger
+from pytr.utils import preview, Timeline, TimelineTransaction, get_logger
 from pytr.api import TradeRepublicError
 
 
@@ -49,6 +49,7 @@ class DL:
         self.doc_urls = []
         self.doc_urls_history = []
         self.tl = Timeline(self.tr)
+        self.tlt = TimelineTransaction(self.tr)
         self.log = get_logger(__name__)
         self.load_history()
 
@@ -66,8 +67,7 @@ class DL:
             self.log.info('Created history file')
 
     async def dl_loop(self):
-        # await self.tl.get_next_timeline(max_age_timestamp=self.since_timestamp)
-        await self.tl.get_next_timeline_transactions(max_age_timestamp=self.since_timestamp)
+        await self.tl.get_next_timeline(max_age_timestamp=self.since_timestamp)
 
         while True:
             try:
@@ -75,16 +75,29 @@ class DL:
             except TradeRepublicError as e:
                 self.log.error(str(e))
             else:
-                #if subscription['type'] == 'timeline':
-                #    await self.tl.get_next_timeline(response, max_age_timestamp=self.since_timestamp)
-                #elif subscription['type'] == 'timelineDetail':
-                #    await self.tl.timelineDetail(response, self, max_age_timestamp=self.since_timestamp)
-                if subscription['type'] == 'timelineTransactions':
-                    await self.tl.get_next_timeline_transactions(response, max_age_timestamp=self.since_timestamp)
-                elif subscription['type'] == 'timelineDetailV2':
-                    await self.tl.timelineDetailV2(response, self, max_age_timestamp=self.since_timestamp)
+                if subscription['type'] == 'timeline':
+                    await self.tl.get_next_timeline(response, max_age_timestamp=self.since_timestamp)
+                elif subscription['type'] == 'timelineDetail':
+                    await self.tl.timelineDetail(response, self, max_age_timestamp=self.since_timestamp)
                 else:
                     self.log.warning(f"unmatched subscription of type '{subscription['type']}':\n{preview(response)}")
+
+    async def dl_loop_v2(self):
+        await self.tlt.get_next_timeline_transactions(max_age_timestamp=self.since_timestamp)
+
+        while True:
+            try:
+                _subscription_id, subscription, response = await self.tr.recv()
+            except TradeRepublicError as e:
+                self.log.error(str(e))
+            else:
+                if subscription['type'] == 'timelineTransactions':
+                    await self.tlt.get_next_timeline_transactions(response, max_age_timestamp=self.since_timestamp)
+                elif subscription['type'] == 'timelineDetailV2':
+                    await self.tlt.timelineDetailV2(response, self, max_age_timestamp=self.since_timestamp)
+                else:
+                    self.log.warning(f"unmatched subscription of type '{subscription['type']}':\n{preview(response)}")
+
 
     def dl_doc(self, doc, titleText, subtitleText, subfolder=None):
         '''
@@ -214,26 +227,23 @@ class DL:
             filepath = directory / doc_type / f'{filename}.pdf'
             filepath_with_doc_id = directory / doc_type / f'{filename_with_doc_id}.pdf'
 
-        self.dl_doc_v2(doc_url, filepath, filepath_with_doc_id)
+        self.dl_doc_v2(doc_url, filepath)
 
-    def dl_doc_v2(self, doc_url, filepath, filepath_with_doc_id):
+    def dl_doc_v2(self, doc_url, filepath):
         '''
         send asynchronous request, append future with filepath to self.futures
         '''
+        filepath = self.output_path / filepath
+
         if self.universal_filepath:
             filepath = sanitize_filepath(filepath, '_', 'universal')
-            filepath_with_doc_id = sanitize_filepath(filepath_with_doc_id, '_', 'universal')
         else:
             filepath = sanitize_filepath(filepath, '_', 'auto')
-            filepath_with_doc_id = sanitize_filepath(filepath_with_doc_id, '_', 'auto')
 
         if filepath in self.filepaths:
             self.log.debug(f'File {filepath} already in queue. Append document id ...')
-            if filepath_with_doc_id in self.filepaths:
-                self.log.debug(f'File {filepath_with_doc_id} already in queue. Skipping...')
-                return
-            else:
-                filepath = filepath_with_doc_id
+            return
+
         self.filepaths.append(filepath)
 
         if filepath.is_file() is False:

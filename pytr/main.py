@@ -205,7 +205,7 @@ def main():
             max_workers=args.workers,
             universal_filepath=args.universal,
         )
-        asyncio.get_event_loop().run_until_complete(dl.dl_loop())
+        asyncio.get_event_loop().run_until_complete(dl.dl_loop_v2())
     elif args.command == 'set_price_alarms':
         # TODO
         print('Not implemented yet')
