@@ -425,23 +425,58 @@ def get_isin(event):
         pass
     return ''
 
+
+def parse_textamount(text, locale='de'):
+    """Parse text representation of amount incl. currency"""
+    # Remove currency:
+    text = text.replace(" ", " ")
+    if " " in text:
+        text = text.split(" ")[0]
+
+    # Convert to float
+    if locale == 'de':
+        return text.replace('.', '')
+    else:
+        return text.replace(',', '')
+
+
+def parse_overview(data):
+    d = {}
+    for elem in data:
+        try:
+            d[elem["title"]] = elem["detail"]["text"]
+        except (TypeError, KeyError):
+            pass
+    return d
+
+
 class Document:
-    def __init__(self, data):
+    def __init__(self, data, timestamp=None):
         self.title = data["title"]
         self.date = data["detail"]
-        self.filedate = datetime.strptime(self.date, "%d.%m.%Y").strftime("%Y-%m-%d")
+        self.filedate = ''
+        try:
+            self.timestamp = datetime.strptime(self.date, "%d.%m.%Y")
+            self.filedate = self.timestamp.strftime("%Y-%m-%d")
+        except ValueError:
+            self.timestamp = timestamp
+            if timestamp:
+                self.date = self.timestamp.strftime("%d.%m.%Y")
+                self.filedate = self.timestamp.strftime("%Y-%m-%d")
+            else:
+                self.date = ''
         self.url = data["action"]["payload"]
         self.id = data["id"]
         self.postboxType = data["postboxType"]
 
 
-def get_documents(event, key=None):
+def get_documents(event, key=None, timestamp=None):
     docs = [] if key is None else {}
     try:
         documents = get_key(event["details"]["sections"], "title", "Dokumente")
         for data in documents["data"]:
             try:
-                doc = Document(data)
+                doc = Document(data, timestamp)
                 if key is None:
                     docs.append(doc)
                 else:
@@ -461,6 +496,7 @@ class TimelineTransaction:
 
         self.timeline_transactions = []
         self.num_timeline_transactions = 0
+
         self.timeline_events_v2 = []
         self.received_detail_v2 = 0
         self.requested_detail_v2 = 0
@@ -473,6 +509,9 @@ class TimelineTransaction:
         self.card_transactions = []
         self.payments = []
         self.direct_debit = []
+        self.interest_payouts = []
+        self.other_transactions = []
+
 
     async def _get_timeline_details_v2(self, num_torequest, max_age_timestamp=0):
         '''
@@ -503,7 +542,7 @@ class TimelineTransaction:
         # Download invoice
         doc = get_documents(event)[0]
         filepath = Path(f'{doc.title} {description}') / f'{doc.filedate} - {description} - {asset}.pdf'
-        dl.dl_doc_v2(doc.url, filepath, doc.id)
+        dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
         return f'{description}: {asset}'
 
     def event_credit(self, event, dl, max_age_timestamp=0):
@@ -519,34 +558,71 @@ class TimelineTransaction:
         # Download invoice
         doc = get_documents(event)[0]
         filepath = Path(f'{description}') / f'{doc.filedate} - {description} - {isin} {asset}.pdf'
-        dl.dl_doc_v2(doc.url, filepath, doc.id)
-        return f'{event["subtitle"]}: {event["title"]}'
+        dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
+        return f'{description}: {isin} {asset}'
 
-    def event_interest_payout_created_(self, event, dl, max_age_timestamp=0):
-        return f'Interest: {event["subtitle"]}'
+    def event_interest_payout_created(self, event, dl, max_age_timestamp=0):
+        amount, currency = get_amount(event["amount"])
+        timestamp, date, _ = get_datetime(event["timestamp"])
 
-    def event_order_executed_(self, event, dl, max_age_timestamp=0):
-        return f'{event["subtitle"]}: {event["title"]}'
+        sections = event["details"]["sections"]
+        overview_data = get_key(sections, "title", "Übersicht")["data"]
+        overview_dict = parse_overview(overview_data)
+        average_saldo = parse_textamount(overview_dict["Durchschnittssaldo"])
+        interest_rate = overview_dict["Jahressatz"]
+
+        description = f'{event["title"]}: {event["subtitle"]}'
+
+        if not self.interest_payouts:
+            self.interest_payouts.append(("Datum", "Durchschnittssaldo", "Zinssatz pro Jahr", "Wert", "Währung", "Notiz"))
+
+        self.interest_payouts.append((date, average_saldo, interest_rate, amount, currency, description))
+
+        for doc in get_documents(event):
+            filepath = Path('Zinsen') / f'{doc.filedate} - {doc.title} Zinsen.pdf'
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
+
+        return description
+
+    def event_order_executed(self, event, dl, max_age_timestamp=0):
+        amount, currency = get_amount(event["amount"])
+        timestamp, *_ = get_datetime(event["timestamp"])
+
+        sections = event["details"]["sections"]
+        overview_data = get_key(sections, "title", "Übersicht")["data"]
+        asset = get_key(overview_data, "title", "Asset")["detail"]["text"]
+        order_type = get_key(overview_data, "title", "Orderart")["detail"]["text"]
+        isin = get_isin(event)
+
+        for doc in get_documents(event):
+            description = doc.title
+            if doc.postboxType == "SECURITIES_SETTLEMENT":
+                description = f'{order_type} {description}'
+            filepath = Path('Wertpapier') / doc.title / f'{doc.filedate} - {description} - {isin} {asset}.pdf'
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
+        return f'{event["subtitle"]}: {isin} {asset}'
 
     def payment(self, event, counterstr):
         amount, currency = get_amount(event["amount"])
         timestamp, date, time = get_datetime(event["timestamp"])
 
+        if not self.payments:
+            self.payments.append(("Datum", "Uhrzeit", "Gegenkonto", "IBAN", "Wert", "Währung"))
+
         for section in event["details"]["sections"]:
             if section["title"] == "Übersicht":
                 infos = {data["title"]: data["detail"]["text"] for data in section["data"]}
                 counteraccount = infos[counterstr]
-                status = infos["Status"]
                 iban = infos["IBAN"]
-                self.payments.append([date, time, counteraccount, iban, status, amount, currency])
+                self.payments.append((date, time, counteraccount, iban, amount, currency))
                 break
         return f'{amount} {currency}'
 
-    def event_payment_inbound(self, event, dl, max_age_timestamp=0):
+    def event_payment_inbound(self, event, dl=None, max_age_timestamp=0):
         s = self.payment(event, 'Von')
         return f'Payment inbound: {s}'
 
-    def event_payment_outbound(self, event, dl, max_age_timestamp=0):
+    def event_payment_outbound(self, event, dl=None, max_age_timestamp=0):
         s = self.payment(event, 'An')
         return f'Payment outbound: {s}'
 
@@ -556,12 +632,12 @@ class TimelineTransaction:
         filedate = timestamp.strftime("%Y-%m-%d %H-%M")
 
         if not self.direct_debit:
-            self.direct_debit.append(["Datum", "Uhrzeit", "Wert", "Währung", "Notiz"])
-        self.direct_debit.append([date, time, amount, currency, "Lastschrifteinzug"])
+            self.direct_debit.append(("Datum", "Uhrzeit", "Wert", "Währung", "Notiz"))
+        self.direct_debit.append((date, time, amount, currency, "Lastschrifteinzug"))
         # Download invoice
-        doc = get_documents(event)[0]
-        filepath = Path(doc.title) / f'{doc.filedate} - Lastschrifteinzug.pdf'
-        dl.dl_doc_v2(doc.url, filepath, doc.id)
+        for doc in get_documents(event):
+            filepath = Path(event["title"]) / f'{doc.filedate} - {doc.title}.pdf'
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
         return f'Payment inbound: direct debit: {amount} {currency}'
 
     def event_repayment(self, event, dl, max_age_timestamp=0):
@@ -577,7 +653,7 @@ class TimelineTransaction:
         # Download invoice
         doc = get_documents(event, "postboxType")["SHAREBOOKING"]
         filepath = Path(f'{doc.title} {description}') / f'{doc.filedate} - {description} - {isin} {asset}.pdf'
-        dl.dl_doc_v2(doc.url, filepath, doc.id)
+        dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
         return f'{description}: {isin} {asset}'
 
     def event_savings_plan_executed(self, event, dl, max_age_timestamp=0):
@@ -587,7 +663,7 @@ class TimelineTransaction:
         asset = get_key(get_key(sections, "title", "Übersicht")["data"], "title", "Asset")["detail"]["text"]
 
         filepath = Path('Sparplan') / 'Abrechnung' / f'{doc.filedate} - Abrechnung Sparplan - {isin} {asset}.pdf'
-        dl.dl_doc_v2(doc.url, filepath, doc.id)
+        dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
         return f'Sparplan: {isin} {asset}'
 
     def event_benefits_saveback_execution(self, event, dl, max_age_timestamp=0):
@@ -597,22 +673,22 @@ class TimelineTransaction:
         doc = docs.get("SAVINGS_PLAN_EXECUTED_V2")
         if doc:
             filepath = Path('Saveback') / 'Abrechung' / f'{doc.filedate} - Abrechnung Saveback - {asset}.pdf'
-            dl.dl_doc_v2(doc.url, filepath, doc.id)
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
 
         doc = docs.get("COSTS_INFO_SAVINGS_PLAN_V2")
         if doc:
             filepath = Path('Saveback') / 'Kosteninformation' / f'{doc.filedate} - Kosteninformation Saveback - {asset}.pdf'
-            dl.dl_doc_v2(doc.url, filepath, doc.id)
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
 
         doc = docs.get("BENEFIT_ACTIVATED")
         if doc:
             filepath = Path('Saveback') / 'Aktivierung' / f'{doc.filedate} - Aktivierung Saveback - {asset}.pdf'
-            dl.dl_doc_v2(doc.url, filepath, doc.id)
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
 
         doc = docs.get("BENEFIT_DEACTIVATED")
         if doc:
             filepath = Path('Saveback') / 'Deaktivierung' / f'{doc.filedate} - Deaktivierung Saveback - {asset}.pdf'
-            dl.dl_doc_v2(doc.url, filepath, doc.id)
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
 
         return f'Saveback: {asset}'
 
@@ -623,22 +699,22 @@ class TimelineTransaction:
         doc = docs.get("SAVINGS_PLAN_EXECUTED_V2")
         if doc:
             filepath = Path('Round-Up') / 'Abrechung' / f'{doc.filedate} - Abrechnung Round-Up - {asset}.pdf'
-            dl.dl_doc_v2(doc.url, filepath, doc.id)
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
 
         doc = docs.get("COSTS_INFO_SAVINGS_PLAN_V2")
         if doc:
             filepath = Path('Round-Up') / 'Kosteninformation' / f'{doc.filedate} - Kosteninformation Round-Up - {asset}.pdf'
-            dl.dl_doc_v2(doc.url, filepath, doc.id)
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
 
         doc = docs.get("BENEFIT_ACTIVATED")
         if doc:
             filepath = Path('Round-Up') / 'Aktivierung' / f'{doc.filedate} - Aktivierung Round-Up - {asset}.pdf'
-            dl.dl_doc_v2(doc.url, filepath, doc.id)
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
 
         doc = docs.get("BENEFIT_DEACTIVATED")
         if doc:
             filepath = Path('Round-Up') / 'Deaktivierung' / f'{doc.filedate} - Deaktivierung Round-Up - {asset}.pdf'
-            dl.dl_doc_v2(doc.url, filepath, doc.id)
+            dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
 
         return f'Round-Up: {asset}'
 
@@ -660,19 +736,19 @@ class TimelineTransaction:
                         if action:
                             action_type = action.get("type", "")
                             if action_type == "benefitsSavebackOverview":
-                                saveback_amount = detail["amount"].rstrip("  €")
+                                saveback_amount = parse_textamount(detail["amount"])
                                 saveback_instrument = detail["title"]
                             elif action_type == "benefitsRoundupOverview":
-                                roundup_amount = detail["amount"].rstrip("  €")
+                                roundup_amount = parse_textamount(detail["amount"])
                                 roundup_instrument = detail["title"]
 
         if not self.card_transactions:
             self.card_transactions.append(
-                ["Datum", "Uhrzeit", "Händler", "Wert", "Währung", "Saveback Betrag", "Saveback Sparplan",
-                 "Round-Up Betrag", "Round-Up Sparplan"])
+                ("Datum", "Uhrzeit", "Händler", "Wert", "Währung", "Saveback Betrag", "Saveback Sparplan",
+                 "Round-Up Betrag", "Round-Up Sparplan"))
         self.card_transactions.append(
-            [date, time, merchant, amount, currency, saveback_amount, saveback_instrument, roundup_amount,
-             roundup_instrument])
+            (date, time, merchant, amount, currency, saveback_amount, saveback_instrument, roundup_amount,
+             roundup_instrument))
         return f'Card transaction: {merchant}'
 
     def event_card_successful_verification(self, event, dl, max_age_timestamp=0):
@@ -682,16 +758,30 @@ class TimelineTransaction:
             amount, currency = '0', 'EUR'
         timestamp, date, time = get_datetime(event["timestamp"])
         merchant = event["title"]
-        self.card_transactions.append([date, time, merchant, amount, currency, '', '', '', ''])
+        self.card_transactions.append((date, time, merchant, amount, currency, '', '', '', ''))
         return f'Card verification: {merchant}'
 
     def event_unknown(self, event, dl, max_age_timestamp=0):
         try:
+            timestamp, date, time = get_datetime(event["timestamp"])
+            amount, currency = get_amount(event["amount"])
+        except (KeyError, IndexError, TypeError):
+            timestamp = None
+        else:
+            if not self.other_transactions:
+                self.other_transactions.append(("Datum", "Uhrzeit", "Wert", "Währung", "Notiz"))
+            self.other_transactions.append((date, time, amount, currency, f'{event["eventType"]}: event["title"]'))
+
+        try:
             name = event["title"]
-            for doc in get_documents(event):
-                filepath = Path('other') / Path(doc.title) / f'{doc.filedate} - {name}.pdf'
-                dl.dl_doc_v2(doc.url, filepath, doc.id)
-            return f'{event["eventType"]}: {doc.title}: {name}'
+            doctitle = ''
+            for doc in get_documents(event, timestamp=timestamp):
+                directory = doc.title.split()[0]
+                if not doctitle:
+                    doctitle = doc.title
+                filepath = Path(directory) / f'{doc.filedate} - {name}.pdf'
+                dl.dl_doc_v2(doc.url, filepath, doc.id, doc.timestamp, max_age_timestamp)
+            return f'{event["eventType"]}: {doctitle}: {name}'
         except (KeyError, IndexError, TypeError):
             return f'{event["eventType"]} -- No document'
 
@@ -750,6 +840,16 @@ class TimelineTransaction:
                     f.write(";".join(elements))
                     f.write("\n")
 
+            with open(dl.output_path / 'interest_payouts.csv', 'w', encoding='utf-8') as f:
+                for elements in self.interest_payouts:
+                    f.write(";".join(elements))
+                    f.write("\n")
+
+            with open(dl.output_path / 'other_transactions.csv', 'w', encoding='utf-8') as f:
+                for elements in self.other_transactions:
+                    f.write(";".join(elements))
+                    f.write("\n")
+
             dl.work_responses()
 
     async def get_next_timeline_transactions(self, response=None, max_age_timestamp=0):
@@ -762,17 +862,13 @@ class TimelineTransaction:
         if response is None:
             # empty response / first timelineTransactions
             self.log.info('Awaiting #1  timelineTransactions')
-            self.timeline_transactions = []
-            self.num_timeline_transactions = 0
-            self.timeline_events_v2 = []
             await self.tr.timeline_transactions()
         else:
             # print(json.dumps(response))
             timestamp = response['items'][-1]['timestamp']
             self.num_timeline_transactions += 1
             self.num_timeline_details_v2 += len(response['items'])
-            for event in response['items']:
-                self.timeline_events_v2.append(event)
+            self.timeline_events_v2.extend(response['items'])
 
             after = response['cursors'].get('after')
             if after is None:
@@ -789,4 +885,40 @@ class TimelineTransaction:
                     f'awaiting #{self.num_timeline_transactions + 1:<2} timelineTransactions'
                 )
                 await self.tr.timeline_transactions(after)
+
+
+    async def get_next_timeline_activity_log(self, response=None, max_age_timestamp=0):
+        '''
+        Get timelineTransactions and save time in list timelineTransactions.
+        Extract timeline events V2 and save them in list timeline_events_v2
+        '''
+
+        if response is None:
+            # empty response / first timelineTransactions
+            self.log.info('Awaiting #1  timelineActivityLog')
+            await self.tr.timeline_activity_log()
+        else:
+            # print(json.dumps(response))
+            timestamp = response['items'][-1]['timestamp']
+            self.num_timeline_transactions += 1
+            self.num_timeline_details_v2 += len(response['items'])
+            for event in response['items']:
+                self.timeline_events_v2.append(event)
+
+            after = response['cursors'].get('after')
+            if after is None:
+                # last timelineTransactions is reached
+                self.log.info(f'Received #{self.num_timeline_transactions:<2} (last) timelineActivityLog')
+                await self._get_timeline_details_v2(5)
+            elif max_age_timestamp != 0 and timestamp < max_age_timestamp:
+                self.log.info(f'Received #{self.num_timeline_transactions + 1:<2} timelineActivityLog')
+                self.log.info('Reached last relevant timelineActivityLog')
+                await self._get_timeline_details_v2(5, max_age_timestamp=max_age_timestamp)
+            else:
+                self.log.info(
+                    f'Received #{self.num_timeline_transactions:<2} timelineActivityLog, '
+                    f'awaiting #{self.num_timeline_transactions + 1:<2} timelineActivityLog'
+                )
+                await self.tr.timeline_activity_log(after)
+
 

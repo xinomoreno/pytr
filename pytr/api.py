@@ -448,6 +448,9 @@ class TradeRepublicApi:
     async def timeline_transactions(self, after=None):
         return await self.subscribe({'type': 'timelineTransactions', 'after': after})
 
+    async def timeline_activity_log(self, after=None):
+        return await self.subscribe({'type': 'timelineActivityLog', 'after': after})
+
     async def timeline(self, after=None):
         return await self.subscribe({'type': 'timeline', 'after': after})
 

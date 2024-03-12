@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import signal
 import time
+from datetime import datetime, timedelta
 
 import shtab
 
@@ -195,7 +196,7 @@ def main():
         if args.last_days == 0:
             since_timestamp = 0
         else:
-            since_timestamp = (time.time() - (24 * 3600 * args.last_days)) * 1000
+            since_timestamp = (datetime.now() - timedelta(args.last_days)).timestamp()
 
         dl = DL(
             login(phone_no=args.phone_no, pin=args.pin, web=not args.applogin),

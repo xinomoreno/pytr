@@ -84,6 +84,7 @@ class DL:
 
     async def dl_loop_v2(self):
         await self.tlt.get_next_timeline_transactions(max_age_timestamp=self.since_timestamp)
+        await self.tlt.get_next_timeline_activity_log(max_age_timestamp=self.since_timestamp)
 
         while True:
             try:
@@ -93,6 +94,8 @@ class DL:
             else:
                 if subscription['type'] == 'timelineTransactions':
                     await self.tlt.get_next_timeline_transactions(response, max_age_timestamp=self.since_timestamp)
+                elif subscription['type'] == 'timelineActivityLog':
+                    await self.tlt.get_next_timeline_activity_log(response, max_age_timestamp=self.since_timestamp)
                 elif subscription['type'] == 'timelineDetailV2':
                     await self.tlt.timelineDetailV2(response, self, max_age_timestamp=self.since_timestamp)
                 else:
@@ -180,59 +183,15 @@ class DL:
         else:
             self.log.debug(f'file {filepath} already exists. Skipping...')
 
-    def dl_doc_v2_(self, doc, titleText, subtitleText, subfolder=None):
+    def dl_doc_v2(self, doc_url, filepath, doc_id, datetimestamp, max_age_timestamp=0):
         '''
         send asynchronous request, append future with filepath to self.futures
         '''
-        doc_url = doc['action']['payload']
 
-        date = doc['detail']
-        iso_date = '-'.join(date.split('.')[::-1])
-        doc_id = doc['id']
+        # Skip documents outsize date range
+        if datetimestamp and datetimestamp.timestamp() < max_age_timestamp:
+            return
 
-        # extract time from subtitleText
-        # time = re.findall('um (\\d+:\\d+) Uhr', subtitleText)
-        time = []
-        if time == []:
-            time = ''
-        else:
-            time = f' {time[0]}'
-
-        if subfolder is not None:
-            directory = self.output_path / subfolder
-        else:
-            directory = self.output_path
-
-        # If doc_type is something like 'Kosteninformation 2', then strip the 2 and save it in doc_type_num
-        doc_type = doc['title'].rsplit(' ')
-        if doc_type[-1].isnumeric() is True:
-            doc_type_num = f' {doc_type.pop()}'
-        else:
-            doc_type_num = ''
-
-        doc_type = ' '.join(doc_type)
-        titleText = titleText.replace('\n', '').replace('/', '-') if titleText is not None else ''
-        subtitleText = subtitleText.replace('\n', '').replace('/', '-') if subtitleText is not None else ''
-
-        filename = self.filename_fmt.format(
-            iso_date=iso_date, time=time, title=titleText, subtitle=subtitleText, doc_num=doc_type_num, id=doc_id
-        )
-
-        filename_with_doc_id = filename + f' ({doc_id})'
-
-        if doc_type in ['Kontoauszug', 'Depotauszug']:
-            filepath = directory / 'Abschlüsse' / f'{filename}' / f'{doc_type}.pdf'
-            filepath_with_doc_id = directory / 'Abschlüsse' / f'{filename_with_doc_id}' / f'{doc_type}.pdf'
-        else:
-            filepath = directory / doc_type / f'{filename}.pdf'
-            filepath_with_doc_id = directory / doc_type / f'{filename_with_doc_id}.pdf'
-
-        self.dl_doc_v2(doc_url, filepath, doc_id)
-
-    def dl_doc_v2(self, doc_url, filepath, doc_id):
-        '''
-        send asynchronous request, append future with filepath to self.futures
-        '''
         filepath = self.output_path / filepath
 
         if self.universal_filepath:
