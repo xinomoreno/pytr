@@ -7,8 +7,8 @@ from requests import session
 
 from pathvalidate import sanitize_filepath
 
-from pytr.utils import preview, Timeline, get_logger
-from pytr.api import TradeRepublicError
+from utils import Timeline, get_logger
+from api import TradeRepublicError
 
 
 class DL:
@@ -83,79 +83,15 @@ class DL:
             else:
                 self.log.warning(f"unmatched subscription of type '{subscription['type']}':\n{preview(response)}")
 
-    def dl_doc(self, doc, titleText, subtitleText, subfolder=None):
+    def dl_doc(self, doc_url, filepath, subfolder=''):
         '''
         send asynchronous request, append future with filepath to self.futures
         '''
-        doc_url = doc['action']['payload']
-        if subtitleText is None:
-            subtitleText = ''
+        filepath = self.output_path / subfolder / filepath
 
-        try:
-            date = doc['detail']
-            iso_date = '-'.join(date.split('.')[::-1])
-        except KeyError:
-            date = ''
-            iso_date = ''
-        doc_id = doc['id']
-
-        # extract time from subtitleText
-        try:
-            time = re.findall('um (\\d+:\\d+) Uhr', subtitleText)
-            if time == []:
-                time = ''
-            else:
-                time = f' {time[0]}'
-        except TypeError:
-            time = ''
-
-        if subfolder is not None:
-            directory = self.output_path / subfolder
+        if filepath.exists():
+            self.log.debug(f'file {filepath} already exists. Skipping...')
         else:
-            directory = self.output_path
-
-        # If doc_type is something like 'Kosteninformation 2', then strip the 2 and save it in doc_type_num
-        doc_type = doc['title'].rsplit(' ')
-        if doc_type[-1].isnumeric() is True:
-            doc_type_num = f' {doc_type.pop()}'
-        else:
-            doc_type_num = ''
-
-        doc_type = ' '.join(doc_type)
-        titleText = titleText.replace('\n', '').replace('/', '-')
-        subtitleText = subtitleText.replace('\n', '').replace('/', '-')
-
-        filename = self.filename_fmt.format(
-            iso_date=iso_date, time=time, title=titleText, subtitle=subtitleText, doc_num=doc_type_num, id=doc_id
-        )
-
-        filename_with_doc_id = filename + f' ({doc_id})'
-
-        if doc_type in ['Kontoauszug', 'Depotauszug']:
-            filepath = directory / 'Abschlüsse' / f'{filename}' / f'{doc_type}.pdf'
-            filepath_with_doc_id = directory / 'Abschlüsse' / f'{filename_with_doc_id}' / f'{doc_type}.pdf'
-        else:
-            filepath = directory / doc_type / f'{filename}.pdf'
-            filepath_with_doc_id = directory / doc_type / f'{filename_with_doc_id}.pdf'
-
-        if self.universal_filepath:
-            filepath = sanitize_filepath(filepath, '_', 'universal')
-            filepath_with_doc_id = sanitize_filepath(filepath_with_doc_id, '_', 'universal')
-        else:
-            filepath = sanitize_filepath(filepath, '_', 'auto')
-            filepath_with_doc_id = sanitize_filepath(filepath_with_doc_id, '_', 'auto')
-
-        if filepath in self.filepaths:
-            self.log.debug(f'File {filepath} already in queue. Append document id {doc_id}...')
-            if filepath_with_doc_id in self.filepaths:
-                self.log.debug(f'File {filepath_with_doc_id} already in queue. Skipping...')
-                return
-            else:
-                filepath = filepath_with_doc_id
-        doc['local filepath'] = str(filepath)
-        self.filepaths.append(filepath)
-
-        if filepath.is_file() is False:
             doc_url_base = doc_url.split('?')[0]
             if doc_url_base in self.doc_urls:
                 self.log.debug(f'URL {doc_url_base} already in queue. Skipping...')
@@ -171,8 +107,6 @@ class DL:
             future.doc_url_base = doc_url_base
             self.futures.append(future)
             self.log.debug(f'Added {filepath} to queue')
-        else:
-            self.log.debug(f'file {filepath} already exists. Skipping...')
 
     def work_responses(self):
         '''
@@ -185,7 +119,7 @@ class DL:
         with self.history_file.open('a') as history_file:
             self.log.info('Waiting for downloads to complete..')
             for future in as_completed(self.futures):
-                if future.filepath.is_file() is True:
+                if future.filepath.exists():
                     self.log.debug(f'file {future.filepath} was already downloaded.')
 
                 try:

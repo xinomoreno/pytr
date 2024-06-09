@@ -36,7 +36,7 @@ from ecdsa import NIST256p, SigningKey
 from ecdsa.util import sigencode_der
 from http.cookiejar import MozillaCookieJar
 
-from pytr.utils import get_logger
+from utils import get_logger
 
 
 home = pathlib.Path.home()

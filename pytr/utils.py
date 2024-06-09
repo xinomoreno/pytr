@@ -65,193 +65,6 @@ def get_logger(name=__name__, verbosity=None):
     return logger
 
 
-def preview(response, num_lines=5):
-    lines = json.dumps(response, indent=2).splitlines()
-    head = '\n'.join(lines[:num_lines])
-    tail = len(lines) - num_lines
-
-    if tail <= 0:
-        return f'{head}\n'
-    else:
-        return f'{head}\n{tail} more lines hidden'
-
-
-def check_version(installed_version):
-    log = get_logger(__name__)
-    try:
-        r = requests.get('https://api.github.com/repos/marzzzello/pytr/tags', timeout=1)
-    except Exception as e:
-        log.error('Could not check for a newer version')
-        log.debug(str(e))
-        return
-    latest_version = r.json()[0]['name']
-
-    if version.parse(installed_version) < version.parse(latest_version):
-        log.warning(f'Installed pytr version ({installed_version}) is outdated. Latest version is {latest_version}')
-    else:
-        log.info('pytr is up to date')
-
-
-def export_transactions(input_path, output_path, lang='auto'):
-    '''
-    Create a CSV with the deposits and removals ready for importing into Portfolio Performance
-    The CSV headers for PP are language dependend
-
-    i18n source from Portfolio Performance:
-    https://github.com/buchen/portfolio/blob/93b73cf69a00b1b7feb136110a51504bede737aa/name.abuchen.portfolio/src/name/abuchen/portfolio/messages_de.properties
-    https://github.com/buchen/portfolio/blob/effa5b7baf9a918e1b5fe83942ddc480e0fd48b9/name.abuchen.portfolio/src/name/abuchen/portfolio/model/labels_de.properties
-
-    '''
-    log = get_logger(__name__)
-    if lang == 'auto':
-        locale = getdefaultlocale()[0]
-        if locale is None:
-            lang = 'en'
-        else:
-            lang = locale.split('_')[0]
-
-    if lang not in ['cs', 'de', 'en', 'es', 'fr', 'it', 'nl', 'pt', 'ru']:
-        lang = 'en'
-
-    i18n = {
-        "date": {
-            "cs": "Datum",
-            "de": "Datum",
-            "en": "Date",
-            "es": "Fecha",
-            "fr": "Date",
-            "it": "Data",
-            "nl": "Datum",
-            "pt": "Data",
-            "ru": "\u0414\u0430\u0442\u0430",
-        },
-        "type": {
-            "cs": "Typ",
-            "de": "Typ",
-            "en": "Type",
-            "es": "Tipo",
-            "fr": "Type",
-            "it": "Tipo",
-            "nl": "Type",
-            "pt": "Tipo",
-            "ru": "\u0422\u0438\u043F",
-        },
-        "value": {
-            "cs": "Hodnota",
-            "de": "Wert",
-            "en": "Value",
-            "es": "Valor",
-            "fr": "Valeur",
-            "it": "Valore",
-            "nl": "Waarde",
-            "pt": "Valor",
-            "ru": "\u0417\u043D\u0430\u0447\u0435\u043D\u0438\u0435",
-        },
-        "deposit": {
-            "cs": 'Vklad',
-            "de": 'Einlage',
-            "en": 'Deposit',
-            "es": 'Dep\u00F3sito',
-            "fr": 'D\u00E9p\u00F4t',
-            "it": 'Deposito',
-            "nl": 'Storting',
-            "pt": 'Dep\u00F3sito',
-            "ru": '\u041F\u043E\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u0435',
-        },
-        "removal": {
-            "cs": 'V\u00FDb\u011Br',
-            "de": 'Entnahme',
-            "en": 'Removal',
-            "es": 'Removal',
-            "fr": 'Retrait',
-            "it": 'Prelievo',
-            "nl": 'Opname',
-            "pt": 'Levantamento',
-            "ru": '\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435',
-        },
-        "interest": {
-            "cs": 'Úrokové poplatky',
-            "de": 'Zinsen',
-            "en": 'Interest',
-            "es": 'Interés',
-            "fr": 'L\'intérêts',
-            "it": 'Interessi',
-            "nl": 'Interest',
-            "pt": 'Odsetki',
-            "ru": '\u041f\u0440\u043e\u0446\u0435\u0301\u043d\u0442\u044b',
-        },
-        "card transaction": {
-            "cs": 'Platba kartou',
-            "de": 'Kartentransaktion',
-            "en": 'Card Transaction',
-            "es": 'Transacción con tarjeta',
-            "fr": 'Transaction par carte',
-            "it": 'Transazione con carta',
-            "nl": 'Kaarttransactie',
-            "pt": 'Transakcja kartą',
-            "ru": '\u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f\u0020\u043f\u043e\u0020\u043a\u0430\u0440\u0442\u0435',
-        },
-        "decimal dot": {
-            "cs": ',',
-            "de": ',',
-            "en": '.',
-            "es": ',',
-            "fr": ',',
-            "it": ',',
-            "nl": ',',
-            "pt": ',',
-            "ru": ',',
-        },
-    }
-    # Read relevant deposit timeline entries
-    with open(input_path, encoding='utf-8') as f:
-        timeline = json.load(f)
-
-    # Write deposit_transactions.csv file
-    # date, transaction, shares, amount, total, fee, isin, name
-    log.info('Write deposit entries')
-    with open(output_path, 'w', encoding='utf-8') as f:
-        # f.write('Datum;Typ;Stück;amount;Wert;Gebühren;ISIN;name\n')
-        csv_fmt = '{date};{type};{value}\n'
-        header = csv_fmt.format(date=i18n['date'][lang], type=i18n['type'][lang], value=i18n['value'][lang])
-        f.write(header)
-
-        for event in timeline:
-            dateTime = datetime.fromisoformat(event['timestamp'][:19])
-            date = dateTime.strftime('%Y-%m-%d')
-
-            title = event['title']
-            try:
-                body = event['body']
-            except KeyError:
-                body = ''
-
-            if 'storniert' in body:
-                continue
-
-            try:
-                decdot = i18n['decimal dot'][lang]
-                amount = str(abs(event['amount']['value'])).replace('.', decdot)
-            except (KeyError, TypeError):
-                continue
-
-            # Cash in
-            if event["eventType"] in ("PAYMENT_INBOUND", "PAYMENT_INBOUND_SEPA_DIRECT_DEBIT"):
-                f.write(csv_fmt.format(date=date, type=i18n['deposit'][lang], value=amount))
-            elif event["eventType"] == "PAYMENT_OUTBOUND":
-                f.write(csv_fmt.format(date=date, type=i18n['removal'][lang], value=amount))
-            elif event["eventType"] == "INTEREST_PAYOUT_CREATED":
-                f.write(csv_fmt.format(date=date, type=i18n['interest'][lang], value=amount))
-            # Dividend - Shares
-            elif title == 'Reinvestierung':
-                # TODO: Implement reinvestment
-                log.warning('Detected reivestment, skipping... (not implemented yet)')
-            elif event["eventType"] == "card_successful_transaction":
-                f.write(csv_fmt.format(date=date, type=i18n['card transaction'][lang], value=amount))
-
-    log.info('Deposit creation finished!')
-
-
 class Timeline:
     def __init__(self, tr):
         self.tr = tr
@@ -259,8 +72,7 @@ class Timeline:
         self.received_detail = 0
         self.requested_detail = 0
         self.num_timeline_details = 0
-        self.events_without_docs = []
-        self.events_with_docs = []
+        self.events = []
         self.num_timelines = 0
         self.timeline_events = {}
         self.timeline_events_iter = None
@@ -269,7 +81,6 @@ class Timeline:
         '''
         Get timelines transactions and save time in list timelines.
         Extract timeline transactions events and save them in list timeline_events
-
         '''
 
         if response is None:
@@ -296,12 +107,10 @@ class Timeline:
                 )
                 await self.tr.timeline_transactions(after)
 
-
     async def get_next_timeline_activity_log(self, response=None, max_age_timestamp=0):
         '''
         Get timelines acvtivity log and save time in list timelines.
         Extract timeline acvtivity log events and save them in list timeline_events
-
         '''
 
         if response is None:
@@ -353,14 +162,6 @@ class Timeline:
             msg = ''
             if max_age_timestamp != 0 and event['timestamp'] > max_age_timestamp:
                 msg += 'Skip: too old'
-            # elif icon is None:
-            #     pass
-            # elif icon.endswith('/human.png'):
-            #     msg += 'Skip: human'
-            # elif icon.endswith('/CashIn.png'):
-            #     msg += 'Skip: CashIn'
-            # elif icon.endswith('/ExemptionOrderChanged.png'):
-            #     msg += 'Skip: ExemptionOrderChanged'
 
             elif action is None:
                 if event.get('actionLabel') is None:
@@ -370,10 +171,8 @@ class Timeline:
             elif action.get('payload') != event['id']:
                 msg += f"Skip: payload unmatched ({action['payload']})"
 
-            if msg == '':
-                self.events_with_docs.append(event)
-            else:
-                self.events_without_docs.append(event)
+            self.events.append(event)
+            if msg != '':
                 self.log.debug(f"{msg} {event['title']}: {event.get('body')} {json.dumps(event)}")
                 self.num_timeline_details -= 1
                 continue
@@ -399,51 +198,28 @@ class Timeline:
             else:
                 await self._get_timeline_details(5)
 
-        isSavingsPlan = (event["eventType"] == "SAVINGS_PLAN_EXECUTED")
-
-        isSavingsPlan_fmt = ''
-        if not isSavingsPlan and event['subtitle'] is not None:
-            isSavingsPlan = 'Sparplan' in event['subtitle']
-            isSavingsPlan_fmt = ' -- SPARPLAN' if isSavingsPlan else ''
-
         max_details_digits = len(str(self.num_timeline_details))
         self.log.info(
             f"{self.received_detail:>{max_details_digits}}/{self.num_timeline_details}: "
-            + f"{event['title']} -- {event['subtitle']}{isSavingsPlan_fmt}"
+            + f"{event.get('title', '')} -- {event.get('subtitle', '')}"
         )
-
-        if isSavingsPlan:
-            subfolder = 'Sparplan'
-        else:
-            subfolder = {
-                'benefits_saveback_execution': 'Saveback',
-                'benefits_spare_change_execution': 'RoundUp',
-                'INTEREST_PAYOUT_CREATED': 'Zinsen',
-            }.get(event["eventType"])
 
         for section in response['sections']:
             if section['type'] == 'documents':
                 for doc in section['data']:
+                    doc_url = doc['action']['payload']
                     try:
-                        timestamp = datetime.strptime(doc['detail'], '%d.%m.%Y').timestamp() * 1000
-                    except (ValueError, KeyError):
-                        timestamp = datetime.now().timestamp() * 1000
-                    if max_age_timestamp == 0 or max_age_timestamp < timestamp:
-                        # save all savingsplan documents in a subdirectory
-                        title = f"{doc['title']} - {event['title']}"
-                        if event['eventType'] in ["ACCOUNT_TRANSFER_INCOMING", "ACCOUNT_TRANSFER_OUTGOING"]:
-                            title += f" - {event['subtitle']}"
-                        dl.dl_doc(doc, title, doc.get('detail'), subfolder)
+                        url = doc_url.split('?')[0]
+                        extension = url[url.rindex('.')-1:]
+                    except (IndexError, ValueError):
+                        extension = ''
+
+                    dl.dl_doc(doc_url=doc['action']['payload'], filepath=doc['id'] + extension)
 
         if self.received_detail == self.num_timeline_details:
             self.log.info('Received all details')
             dl.output_path.mkdir(parents=True, exist_ok=True)
-            with open(dl.output_path / 'other_events.json', 'w', encoding='utf-8') as f:
-                json.dump(self.events_without_docs, f, ensure_ascii=False, indent=2)
-
-            with open(dl.output_path / 'events_with_documents.json', 'w', encoding='utf-8') as f:
-                json.dump(self.events_with_docs, f, ensure_ascii=False, indent=2)
-
-            export_transactions(dl.output_path / 'events_with_documents.json', dl.output_path / 'account_transactions.csv')
+            with open(dl.output_path / 'events.json', 'w', encoding='utf-8') as f:
+                json.dump(self.events, f, ensure_ascii=False, indent=2)
 
             dl.work_responses()

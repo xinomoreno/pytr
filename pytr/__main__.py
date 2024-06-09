@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import logging
+import sys
 
-from pytr.main import main
+from main import main
 
 if __name__ == '__main__':
     try:

@@ -3,8 +3,8 @@ import sys
 from pygments import highlight, lexers, formatters
 import time
 
-from pytr.api import TradeRepublicApi, CREDENTIALS_FILE
-from pytr.utils import get_logger
+from api import TradeRepublicApi, CREDENTIALS_FILE
+from utils import get_logger
 
 
 def get_settings(tr):
