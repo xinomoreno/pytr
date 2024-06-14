@@ -213,7 +213,7 @@ def export_transactions(input_path, output_path, lang='auto'):
     with open(output_path, 'w', encoding='utf-8') as f:
         # f.write('Datum;Typ;Stück;amount;Wert;Gebühren;ISIN;name\n')
         csv_fmt = '{date};{type};{value}\n'
-        header = csv_fmt.format(date=i18n['date'][lang], type=i18n['type'][lang], value=i18n['value'][lang])
+        header = csv_fmt.format(date=i18n['date'][lang], type=i18n['type'][lang], title="Title", value=i18n['value'][lang])
         f.write(header)
 
         for event in timeline:
@@ -237,11 +237,11 @@ def export_transactions(input_path, output_path, lang='auto'):
 
             # Cash in
             if event["eventType"] in ("PAYMENT_INBOUND", "PAYMENT_INBOUND_SEPA_DIRECT_DEBIT"):
-                f.write(csv_fmt.format(date=date, type=i18n['deposit'][lang], value=amount))
+                f.write(csv_fmt.format(date=date, type=i18n['deposit'][lang], title=title, value=amount))
             elif event["eventType"] == "PAYMENT_OUTBOUND":
-                f.write(csv_fmt.format(date=date, type=i18n['removal'][lang], value=amount))
+                f.write(csv_fmt.format(date=date, type=i18n['removal'][lang], title=title, value=amount))
             elif event["eventType"] == "INTEREST_PAYOUT_CREATED":
-                f.write(csv_fmt.format(date=date, type=i18n['interest'][lang], value=amount))
+                f.write(csv_fmt.format(date=date, type=i18n['interest'][lang], title=title, value=amount))
             # Dividend - Shares
             elif title == 'Reinvestierung':
                 # TODO: Implement reinvestment
