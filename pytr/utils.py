@@ -247,7 +247,7 @@ def export_transactions(input_path, output_path, lang='auto'):
                 # TODO: Implement reinvestment
                 log.warning('Detected reivestment, skipping... (not implemented yet)')
             elif event["eventType"] == "card_successful_transaction":
-                f.write(csv_fmt.format(date=date, type=i18n['card transaction'][lang], value=amount))
+                f.write(csv_fmt.format(date=date, type=i18n['card transaction'][lang], title=title, value=amount))
 
     log.info('Deposit creation finished!')
 
