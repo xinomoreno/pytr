@@ -212,7 +212,7 @@ def export_transactions(input_path, output_path, lang='auto'):
     log.info('Write deposit entries')
     with open(output_path, 'w', encoding='utf-8') as f:
         # f.write('Datum;Typ;Stück;amount;Wert;Gebühren;ISIN;name\n')
-        csv_fmt = '{date};{type};{value}\n'
+        csv_fmt = '{date};{type};{title};{value}\n'
         header = csv_fmt.format(date=i18n['date'][lang], type=i18n['type'][lang], title="Title", value=i18n['value'][lang])
         f.write(header)
 
